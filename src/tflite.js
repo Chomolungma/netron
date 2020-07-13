@@ -2,7 +2,7 @@
 
 var tflite = tflite || {};
 var base = base || require('./base');
-var flatbuffers = flatbuffers || require('flatbuffers').flatbuffers;
+var flatbuffers = flatbuffers || require('./flatbuffers');
 var long = long || { Long: require('long') };
 
 tflite.ModelFactory = class {
@@ -26,20 +26,19 @@ tflite.ModelFactory = class {
     }
 
     open(context, host) {
-        return host.require('./tflite-schema').then((schema) => {
-            tflite.schema = schema.tflite_schema;
-            tflite.metadata_schema = schema.tflite_metadata_schema;
+        return host.require('./tflite-schema').then(() => {
+            tflite.schema = flatbuffers.get('tflite').tflite;
             return tflite.Metadata.open(host).then((metadata) => {
                 const identifier = context.identifier;
                 try {
                     const extension = identifier.split('.').pop().toLowerCase();
                     switch (extension) {
                         default: {
-                            const buffer = new flatbuffers.ByteBuffer(context.buffer);
-                            if (!tflite.schema.Model.bufferHasIdentifier(buffer)) {
+                            const reader = new flatbuffers.Reader(context.buffer);
+                            if (!tflite.schema.Model.identifier(reader)) {
                                 throw new tflite.Error("File format is not tflite.Model.");
                             }
-                            const model = tflite.schema.Model.getRootAsModel(buffer);
+                            const model = tflite.schema.Model.create(reader);
                             return new tflite.Model(metadata, null, model);
                         }
                         case 'json': {
@@ -64,20 +63,22 @@ tflite.Model = class {
         this._format = 'TensorFlow Lite';
         switch (format) {
             default: {
-                this._format = this._format + ' v' + model.version().toString();
-                this._description = model.description() || '';
+                this._format = this._format + ' v' + model.version.toString();
+                this._description = model.description || '';
                 const operators = [];
                 const builtinOperatorMap = {};
                 for (const key of Object.keys(tflite.schema.BuiltinOperator)) {
                     const index = tflite.schema.BuiltinOperator[key];
                     builtinOperatorMap[index] = tflite.Utility.type(key);
                 }
-                for (let i = 0; i < model.operatorCodesLength(); i++) {
-                    const operatorCode = model.operatorCodes(i);
-                    const code = operatorCode.builtinCode();
-                    const version = operatorCode.version();
+                debugger;
+                const operator_codes = model.operator_codes;
+                for (let i = 0; i < operator_codes.length; i++) {
+                    const operatorCode = operator_codes[i];
+                    const code = operatorCode.builtin_code;
+                    const version = operatorCode.version;
                     const custom = code === tflite.schema.BuiltinOperator.CUSTOM;
-                    const name = custom ? operatorCode.customCode() : builtinOperatorMap[code];
+                    const name = custom ? operatorCode.custom_code : builtinOperatorMap[code];
                     if (!name) {
                         throw new tflite.Error("Invalid built-in code '" + code.toString() + "' at '" + i.toString() + "'.");
                     }
@@ -102,9 +103,9 @@ tflite.Model = class {
                             break;
                         }
                         case 'TFLITE_METADATA': {
-                            const buffer = new flatbuffers.ByteBuffer(model.buffers(metadata.buffer()).dataArray() || []);
-                            if (tflite.metadata_schema.ModelMetadata.bufferHasIdentifier(buffer)) {
-                                modelMetadata = tflite.metadata_schema.ModelMetadata.getRootAsModelMetadata(buffer);
+                            const buffer = new flatbuffers.Reader(model.buffers(metadata.buffer()).dataArray() || []);
+                            if (tflite.schema.ModelMetadata.identifier(buffer)) {
+                                modelMetadata = tflite.schema.ModelMetadata.create(buffer);
                                 this._name = modelMetadata.name() || '';
                                 this._version = modelMetadata.version() || '';
                                 this._description = modelMetadata.description() ? [ this.description, modelMetadata.description()].join(' ') : this._description;
@@ -228,7 +229,7 @@ tflite.Graph = class {
                                 }
                                 case 2: {
                                     denotation = 'Image';
-                                    const imageProperties = content.contentProperties(Reflect.construct(tflite.metadata_schema.ImageProperties, []));
+                                    const imageProperties = content.contentProperties(Reflect.construct(tflite.schema.ImageProperties, []));
                                     switch(imageProperties.colorSpace()) {
                                         case 1: denotation += '(RGB)'; break;
                                         case 2: denotation += '(Grayscale)'; break;
